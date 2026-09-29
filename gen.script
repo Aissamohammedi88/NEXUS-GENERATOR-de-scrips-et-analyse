@@ -1,0 +1,982 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# NEXUS GENERATOR RUNNER
+# Lance le generateur en mode web sur le port 8092.
+# Auteur : Aissa Mohammedi (DGK)
+# Licence : NEXUS-OPEN-2.0
+# Compatible a-Shell iOS - os.path uniquement - stdlib pure
+
+import os
+import sys
+import json
+import ast
+import re
+import time
+import socket
+import hashlib
+import datetime
+import threading
+import textwrap
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
+
+VERSION = "1.0.0"
+AUTEUR = "Aissa Mohammedi (DGK)"
+LICENCE = "NEXUS-OPEN-2.0"
+
+HOME = os.path.expanduser("~")
+BASE = os.path.join(HOME, "Documents", "nexus_generator")
+GENERATED = os.path.join(BASE, "generated")
+os.makedirs(BASE, exist_ok=True)
+os.makedirs(GENERATED, exist_ok=True)
+
+PORT = 8092
+
+DOMAINES = {
+"systeme": {
+"mots": ["pc", "systeme", "cpu", "ram", "memoire", "disque",
+"analyse", "diagnostic", "monitoring", "performance",
+"processus", "hardware", "machine", "ordinateur"],
+"imports": ["platform", "shutil"],
+},
+"reseau": {
+"mots": ["reseau", "network", "ping", "port", "scan", "dns", "ip",
+"tcp", "udp", "socket", "latence", "connection", "http",
+"url", "api", "client", "serveur", "server"],
+"imports": ["ssl", "urllib.request", "urllib.parse"],
+},
+"fichier": {
+"mots": ["fichier", "file", "dossier", "directory", "repertoire",
+"scan", "chercher", "find", "backup", "sauvegarde",
+"copie", "hash", "duplicate", "doublon"],
+"imports": ["hashlib", "shutil"],
+},
+"web": {
+"mots": ["web", "html", "http", "site", "page", "dashboard",
+"interface", "rest"],
+"imports": ["urllib.parse"],
+},
+"donnees": {
+"mots": ["donnees", "data", "statistique", "graphique", "chart",
+"csv", "rapport", "report"],
+"imports": ["csv", "collections", "statistics"],
+},
+"securite": {
+"mots": ["securite", "security", "audit", "vulnerabilite",
+"hash", "crypt", "chiffrement", "ssl", "tls", "certificat"],
+"imports": ["hashlib", "hmac", "secrets", "ssl"],
+},
+}
+
+ACTIONS = {
+"scanner": ["scan", "chercher", "analyser", "inspecter", "lister",
+"enumerer", "detecter"],
+"monitorer": ["monitorer", "surveiller", "monitoring", "suivi", "tracker"],
+"generer": ["generer", "creer", "produire", "build"],
+"analyser": ["analyser", "etudier", "evaluer", "diagnostiquer"],
+"afficher": ["afficher", "montrer", "display", "rapport"],
+"sauvegarder": ["sauvegarder", "backup", "enregistrer", "save", "exporter"],
+"envoyer": ["envoyer", "send", "post", "upload"],
+"recevoir": ["recevoir", "receive", "get", "download", "fetch"],
+}
+
+
+def log(msg):
+ts = time.strftime("%Y-%m-%d %H:%M:%S")
+try:
+print("[" + ts + "] " + str(msg), flush=True)
+except Exception:
+pass
+
+
+def ip_locale():
+try:
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.connect(("8.8.8.8", 80))
+ip = s.getsockname()[0]
+s.close()
+return ip
+except Exception:
+return "localhost"
+
+
+def detecter_domaine(prompt):
+p = prompt.lower()
+scores = {}
+for domaine, config in DOMAINES.items():
+score = sum(1 for mot in config["mots"] if mot in p)
+scores[domaine] = score
+if max(scores.values()) == 0:
+return "systeme", 0.3
+meilleur = max(scores, key=scores.get)
+total = sum(scores.values())
+confiance = scores[meilleur] / total if total > 0 else 0.3
+return meilleur, round(confiance, 2)
+
+
+def detecter_actions(prompt):
+p = prompt.lower()
+actions = []
+for action, mots in ACTIONS.items():
+if any(mot in p for mot in mots):
+actions.append(action)
+return actions
+
+
+def evaluer_fiabilite(prompt, domaine, actions, confiance):
+score = 0
+raisons = []
+if len(prompt) > 40:
+score += 20
+raisons.append("+20 prompt detaille")
+elif len(prompt) > 15:
+score += 10
+raisons.append("+10 prompt moyen")
+else:
+score -= 10
+raisons.append("-10 prompt trop court")
+if confiance > 0.6:
+score += 25
+raisons.append("+25 domaine clair")
+elif confiance > 0.4:
+score += 15
+raisons.append("+15 domaine identifiable")
+else:
+score -= 10
+raisons.append("-10 domaine ambigu")
+if len(actions) >= 2:
+score += 20
+raisons.append("+20 actions multiples")
+elif len(actions) == 1:
+score += 10
+raisons.append("+10 une action")
+else:
+score -= 5
+raisons.append("-5 aucune action")
+score += 15
+raisons.append("+15 domaine connu")
+score = max(0, min(100, score))
+if score >= 80:
+niveau = "ELEVEE"
+elif score >= 60:
+niveau = "MOYENNE"
+elif score >= 40:
+niveau = "FAIBLE"
+else:
+niveau = "BASSE"
+return {"score": score, "niveau": niveau, "raisons": raisons}
+
+
+def generer_entete(prompt, domaine, port):
+ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+h = hashlib.sha256(prompt.encode()).hexdigest()[:12]
+return (
+"#!/usr/bin/env python3\n"
+"# -*- coding: utf-8 -*-\n"
+"# NEXUS GENERATED SCRIPT\n"
+"# Auteur : " + AUTEUR + "\n"
+"# Licence : " + LICENCE + "\n"
+"# Domaine : " + domaine + "\n"
+"# Prompt : " + prompt[:180].replace("\n", " ") + "\n"
+"# Hash : " + h + "\n"
+"# Date : " + ts + "\n"
+"# Port : " + str(port) + "\n"
+"\n"
+)
+
+
+def generer_imports(domaine):
+base = [
+"import os",
+"import sys",
+"import json",
+"import time",
+"import socket",
+"import threading",
+"import datetime",
+"from http.server import BaseHTTPRequestHandler, HTTPServer",
+"from socketserver import ThreadingMixIn",
+]
+config = DOMAINES.get(domaine, DOMAINES["systeme"])
+extras = []
+for imp in config["imports"]:
+if imp in ("os", "sys", "json", "time", "socket", "threading", "datetime"):
+continue
+if imp == "urllib.request":
+extras.append("import urllib.request")
+elif imp == "urllib.parse":
+extras.append("import urllib.parse")
+else:
+extras.append("import " + imp)
+tous = base + extras
+return "\n".join(sorted(set(tous))) + "\n\n"
+
+
+def bloc_collecte_systeme():
+return textwrap.dedent('''
+def collecter_systeme():
+resultat = {
+"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+"hostname": socket.gethostname(),
+"pid": os.getpid(),
+"cwd": os.getcwd(),
+"home": os.path.expanduser("~"),
+"cpu_count": os.cpu_count() or 0,
+"python": sys.version.split()[0],
+}
+try:
+import platform
+resultat["plateforme"] = platform.platform()
+resultat["machine"] = platform.machine()
+resultat["systeme"] = platform.system()
+except Exception:
+resultat["plateforme"] = "inconnu"
+try:
+with open("/proc/meminfo") as f:
+mem = {}
+for line in f:
+if ":" in line:
+k, v = line.split(":", 1)
+mem[k.strip()] = v.strip()
+total_kb = int(mem.get("MemTotal", "0").split()[0])
+avail_kb = int(mem.get("MemAvailable", "0").split()[0])
+resultat["memoire_total_mo"] = round(total_kb / 1024, 2)
+resultat["memoire_libre_mo"] = round(avail_kb / 1024, 2)
+if total_kb > 0:
+resultat["memoire_utilisee_pct"] = round((total_kb - avail_kb) / total_kb * 100, 2)
+except Exception:
+resultat["memoire_total_mo"] = None
+try:
+import shutil
+total, used, free = shutil.disk_usage("/")
+resultat["disque_total_go"] = round(total / (1024 ** 3), 2)
+resultat["disque_libre_go"] = round(free / (1024 ** 3), 2)
+resultat["disque_utilise_pct"] = round(used / total * 100, 2)
+except Exception:
+resultat["disque_total_go"] = None
+try:
+with open("/proc/loadavg") as f:
+parts = f.read().split()
+resultat["load_1min"] = float(parts[0])
+resultat["load_5min"] = float(parts[1])
+resultat["load_15min"] = float(parts[2])
+except Exception:
+resultat["load_1min"] = None
+try:
+with open("/proc/uptime") as f:
+resultat["uptime_s"] = int(float(f.read().split()[0]))
+except Exception:
+resultat["uptime_s"] = None
+return resultat
+''').strip()
+
+
+def bloc_collecte_reseau():
+return textwrap.dedent('''
+def tester_tcp(host, port, timeout=5):
+try:
+t0 = time.time()
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(timeout)
+s.connect((host, port))
+dt = round((time.time() - t0) * 1000, 2)
+s.close()
+return {"host": host, "port": port, "ok": True, "temps_ms": dt}
+except Exception as e:
+return {"host": host, "port": port, "ok": False, "erreur": str(e)[:100]}
+
+
+def resoudre_dns(host):
+try:
+ip = socket.gethostbyname(host)
+return {"host": host, "ip": ip, "ok": True}
+except Exception as e:
+return {"host": host, "ip": None, "ok": False, "erreur": str(e)[:100]}
+
+
+def collecter_reseau():
+cibles = [
+("cloudflare-dns", "1.1.1.1", 53),
+("google-dns", "8.8.8.8", 53),
+("github", "github.com", 443),
+("google", "google.com", 443),
+]
+resultats = []
+for nom, host, port in cibles:
+if host.replace(".", "").isdigit():
+dns = {"host": host, "ip": host, "ok": True}
+else:
+dns = resoudre_dns(host)
+tcp = tester_tcp(host, port)
+resultats.append({"nom": nom, "dns": dns, "tcp": tcp})
+return resultats
+''').strip()
+
+
+def bloc_collecte_fichier():
+return textwrap.dedent('''
+def collecter_fichiers(chemin=None):
+if chemin is None:
+chemin = os.path.expanduser("~")
+resultat = {
+"chemin": chemin,
+"existe": os.path.isdir(chemin),
+"total_fichiers": 0,
+"total_dossiers": 0,
+"total_octets": 0,
+"par_extension": {},
+"plus_gros": [],
+}
+if not resultat["existe"]:
+return resultat
+fichiers = []
+for root, dirs, files in os.walk(chemin):
+resultat["total_dossiers"] += len(dirs)
+for f in files:
+full = os.path.join(root, f)
+try:
+taille = os.path.getsize(full)
+except OSError:
+continue
+ext = os.path.splitext(f)[1].lower() or "(sans)"
+resultat["total_fichiers"] += 1
+resultat["total_octets"] += taille
+resultat["par_extension"][ext] = resultat["par_extension"].get(ext, 0) + 1
+fichiers.append((full, taille))
+fichiers.sort(key=lambda x: -x[1])
+resultat["plus_gros"] = [{"chemin": p, "taille": t} for p, t in fichiers[:10]]
+return resultat
+''').strip()
+
+
+def bloc_collecte_web():
+return textwrap.dedent('''
+def collecter_web():
+resultat = {
+"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+"hostname": socket.gethostname(),
+"port": PORT,
+"uptime_s": 0,
+}
+try:
+with open("/proc/uptime") as f:
+resultat["uptime_s"] = int(float(f.read().split()[0]))
+except Exception:
+pass
+return resultat
+''').strip()
+
+
+def bloc_collecte_donnees():
+return textwrap.dedent('''
+def collecter_donnees(chemin=None):
+resultat = {"chemin": chemin, "existe": False, "type": None, "taille": 0}
+if not chemin or not os.path.isfile(chemin):
+return resultat
+resultat["existe"] = True
+resultat["taille"] = os.path.getsize(chemin)
+if chemin.endswith(".json"):
+resultat["type"] = "json"
+try:
+with open(chemin, "r", encoding="utf-8") as f:
+data = json.load(f)
+if isinstance(data, list):
+resultat["elements"] = len(data)
+elif isinstance(data, dict):
+resultat["cles"] = list(data.keys())[:20]
+except Exception as e:
+resultat["erreur"] = str(e)[:100]
+elif chemin.endswith(".csv"):
+resultat["type"] = "csv"
+try:
+import csv
+with open(chemin, "r", encoding="utf-8") as f:
+reader = csv.reader(f)
+rows = list(reader)
+resultat["lignes"] = len(rows)
+if rows:
+resultat["colonnes"] = rows[0]
+except Exception as e:
+resultat["erreur"] = str(e)[:100]
+return resultat
+''').strip()
+
+
+def bloc_collecte_securite():
+return textwrap.dedent('''
+def collecter_securite():
+resultat = {
+"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+"hostname": socket.gethostname(),
+}
+try:
+import ssl
+import hashlib as _h
+ctx = ssl.create_default_context()
+with socket.create_connection(("www.google.com", 443), timeout=10) as sock:
+with ctx.wrap_socket(sock, server_hostname="www.google.com") as ssock:
+der = ssock.getpeercert(binary_form=True)
+resultat["tls_test"] = {
+"host": "www.google.com",
+"version": ssock.version(),
+"sha256": _h.sha256(der).hexdigest() if der else None,
+}
+except Exception as e:
+resultat["tls_test"] = {"erreur": str(e)[:100]}
+try:
+import secrets
+resultat["token_exemple"] = secrets.token_hex(16)
+except Exception:
+resultat["token_exemple"] = None
+return resultat
+''').strip()
+
+
+COLLECTES = {
+"systeme": bloc_collecte_systeme,
+"reseau": bloc_collecte_reseau,
+"fichier": bloc_collecte_fichier,
+"web": bloc_collecte_web,
+"donnees": bloc_collecte_donnees,
+"securite": bloc_collecte_securite,
+}
+
+COLLECTE_FONCTION = {
+"systeme": "collecter_systeme()",
+"reseau": "collecter_reseau()",
+"fichier": "collecter_fichiers()",
+"web": "collecter_web()",
+"donnees": "collecter_donnees()",
+"securite": "collecter_securite()",
+}
+
+
+def generer_html_dashboard(domaine, port, version, licence):
+html = """<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NEXUS GENERATED - __DOMAINE__</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,system-ui,sans-serif;background:#05080a;color:#c8e8ff;padding:20px;min-height:100vh;background-image:radial-gradient(ellipse at top,rgba(0,200,150,0.08),transparent 60%)}
+.container{max-width:1000px;margin:0 auto}
+h1{font-size:clamp(20px,4vw,32px);font-weight:700;letter-spacing:-1.5px;background:linear-gradient(135deg,#00ff88,#00d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:6px}
+.subtitle{color:#5a7a9a;font-size:12px;font-family:ui-monospace,monospace;margin-bottom:20px}
+.panel{background:rgba(5,15,20,0.85);border:1px solid #1a3a4a;border-radius:14px;padding:20px;margin-bottom:16px}
+.panel h2{color:#00ff88;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #1a3a4a}
+pre{background:rgba(0,0,0,0.5);border-radius:8px;padding:16px;font-family:ui-monospace,monospace;font-size:12px;color:#00ffc8;overflow-x:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.btn{background:#00ff88;color:#000;border:none;padding:12px 24px;border-radius:8px;font-weight:700;cursor:pointer;font-family:monospace;font-size:13px;letter-spacing:1px;margin-right:8px}
+.btn:hover{background:#00cc66}
+.footer{text-align:center;color:#3a4a6a;font-size:11px;margin-top:30px;font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>NEXUS GENERATED SCRIPT</h1>
+<div class="subtitle">__DOMAINE__ - __AUTEUR__ - v__VERSION__ - port __PORT__</div>
+<div class="panel">
+<button class="btn" onclick="charger()">RAFRAICHIR</button>
+</div>
+<div class="panel">
+<h2>Resultat</h2>
+<pre id="resultat">Chargement...</pre>
+</div>
+<div class="footer">NEXUS v__VERSION__ - __LICENCE__</div>
+</div>
+<script>
+async function charger(){
+try{
+const r = await fetch('/api/collecter');
+const d = await r.json();
+document.getElementById('resultat').textContent = JSON.stringify(d, null, 2);
+}catch(e){
+document.getElementById('resultat').textContent = 'Erreur : ' + e.message;
+}
+}
+charger();
+setInterval(charger, 3000);
+</script>
+</body>
+</html>"""
+html = html.replace("__DOMAINE__", domaine)
+html = html.replace("__AUTEUR__", AUTEUR)
+html = html.replace("__VERSION__", version)
+html = html.replace("__LICENCE__", licence)
+html = html.replace("__PORT__", str(port))
+return html
+
+
+def generer_serveur_code():
+return textwrap.dedent('''
+
+class Handler(BaseHTTPRequestHandler):
+def log_message(self, *a):
+pass
+
+def _send(self, code, content, ctype="application/json"):
+try:
+self.send_response(code)
+self.send_header("Content-Type", ctype + "; charset=utf-8")
+self.send_header("Access-Control-Allow-Origin", "*")
+self.send_header("Content-Length", str(len(content)))
+self.end_headers()
+self.wfile.write(content)
+except (BrokenPipeError, ConnectionResetError):
+pass
+
+def do_GET(self):
+p = self.path.split("?")[0]
+if p in ("/", "/index.html"):
+return self._send(200, HTML_PAGE.encode("utf-8"), "text/html")
+if p == "/api/collecter":
+try:
+data = collecter()
+return self._send(200, json.dumps(data, ensure_ascii=False, default=str).encode())
+except Exception as e:
+return self._send(500, json.dumps({"erreur": str(e)[:200]}).encode())
+if p == "/api/health":
+return self._send(200, b'{"ok":true}')
+return self._send(404, b'{"erreur":"not found"}')
+
+
+class Server(ThreadingMixIn, HTTPServer):
+daemon_threads = True
+allow_reuse_address = True
+''').strip()
+
+
+def generer_main_code():
+return textwrap.dedent('''
+
+def lancer_serveur(port=PORT):
+print("=" * 60)
+print("NEXUS GENERATED - " + DOMAINE)
+print("=" * 60)
+print("Port : " + str(port))
+print("Local : http://localhost:" + str(port) + "/")
+try:
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.connect(("8.8.8.8", 80))
+ip = s.getsockname()[0]
+s.close()
+print("Reseau : http://" + ip + ":" + str(port) + "/")
+except Exception:
+pass
+print("")
+print("Ctrl+C pour arreter")
+print("")
+try:
+with Server(("0.0.0.0", port), Handler) as httpd:
+httpd.serve_forever()
+except KeyboardInterrupt:
+print("")
+print("Arrete.")
+
+
+def main():
+import argparse
+p = argparse.ArgumentParser()
+p.add_argument("--port", type=int, default=PORT)
+p.add_argument("--cli", action="store_true", help="Mode CLI sans serveur")
+a = p.parse_args()
+if a.cli:
+data = collecter()
+print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+return
+lancer_serveur(a.port)
+
+
+if __name__ == "__main__":
+main()
+''').strip()
+
+
+def verifier_syntaxe(code):
+try:
+ast.parse(code)
+return {"ok": True, "erreur": None}
+except SyntaxError as e:
+return {"ok": False, "erreur": "ligne " + str(e.lineno) + " : " + str(e.msg)}
+
+
+def verifier_imports(code):
+stdlib = {
+"os", "sys", "json", "time", "re", "ast", "hashlib", "hmac",
+"secrets", "ssl", "socket", "urllib", "http", "socketserver",
+"subprocess", "threading", "platform", "shutil", "pathlib",
+"datetime", "csv", "collections", "statistics", "argparse",
+"textwrap", "base64", "gzip", "sqlite3", "random", "string",
+"uuid", "tempfile", "io", "pickle", "math",
+}
+importes = set()
+for m in re.findall(r"^\s*(?:from\s+([a-zA-Z0-9_.]+)\s+import|import\s+([a-zA-Z0-9_.]+))", code, re.M):
+nom = m[0] or m[1]
+base = nom.split(".")[0]
+if base:
+importes.add(base)
+return [i for i in importes if i not in stdlib]
+
+
+def generer_script(prompt, port):
+domaine, confiance = detecter_domaine(prompt)
+actions = detecter_actions(prompt)
+fiabilite = evaluer_fiabilite(prompt, domaine, actions, confiance)
+
+entete = generer_entete(prompt, domaine, port)
+imports = generer_imports(domaine)
+bloc_collecte = COLLECTES.get(domaine, bloc_collecte_systeme)()
+bloc_collecter = "def collecter():\n return " + COLLECTE_FONCTION.get(domaine, "collecter_systeme()") + "\n"
+html_dash = generer_html_dashboard(domaine, port, VERSION, LICENCE)
+bloc_html = 'HTML_PAGE = """' + html_dash + '"""'
+bloc_serveur = generer_serveur_code()
+bloc_main = generer_main_code()
+
+code = (
+entete
++ imports
++ "\nPORT = " + str(port) + "\n"
++ "DOMAINE = \"" + domaine + "\"\n"
++ "LICENCE = \"" + LICENCE + "\"\n\n"
++ bloc_collecte + "\n\n"
++ bloc_collecter + "\n\n"
++ bloc_html + "\n\n\n"
++ bloc_serveur + "\n\n\n"
++ bloc_main + "\n"
+)
+
+verif = verifier_syntaxe(code)
+non_stdlib = verifier_imports(code)
+code_hash = hashlib.sha256(code.encode()).hexdigest()
+
+return {
+"prompt": prompt,
+"domaine": domaine,
+"confiance_domaine": confiance,
+"actions": actions,
+"fiabilite": fiabilite,
+"code": code,
+"code_hash": code_hash,
+"port": port,
+"verification_syntaxe": verif,
+"imports_non_stdlib": non_stdlib,
+"lignes": code.count("\n"),
+"octets": len(code.encode()),
+}
+
+
+def sauvegarder(r):
+ts = int(time.time())
+h = r["code_hash"][:8]
+nom = "nexus_gen_" + str(ts) + "_" + h + ".py"
+chemin = os.path.join(GENERATED, nom)
+with open(chemin, "w", encoding="utf-8") as f:
+f.write(r["code"])
+rapport = os.path.join(GENERATED, "nexus_gen_" + str(ts) + "_" + h + ".json")
+with open(rapport, "w", encoding="utf-8") as f:
+json.dump(r, f, indent=2, ensure_ascii=False, default=str)
+return chemin
+
+
+HTML_INDEX = """<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NEXUS GENERATOR</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,system-ui,sans-serif;background:#08050a;color:#e0d0ff;padding:20px;min-height:100vh;background-image:radial-gradient(ellipse at top,rgba(200,0,255,0.08),transparent 60%)}
+.container{max-width:1100px;margin:0 auto}
+h1{font-size:clamp(22px,4vw,34px);font-weight:700;letter-spacing:-1.5px;background:linear-gradient(135deg,#c800ff,#00d4ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:4px}
+.subtitle{color:#7a5a9a;font-size:12px;font-family:ui-monospace,monospace;margin-bottom:22px}
+.panel{background:rgba(15,8,20,0.85);border:1px solid #3a1a4a;border-radius:14px;padding:22px;margin-bottom:16px}
+.panel h2{color:#c800ff;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #3a1a4a}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:11px;color:#7a5a9a;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.form-group textarea,.form-group input{width:100%;padding:12px 14px;background:rgba(0,0,0,0.5);border:1px solid #3a1a4a;border-radius:10px;color:#e0d0ff;font-size:14px;font-family:inherit;outline:none}
+.form-group textarea:focus,.form-group input:focus{border-color:#c800ff}
+.form-group textarea{min-height:90px;resize:vertical;font-family:ui-monospace,monospace;line-height:1.5}
+.btn{background:linear-gradient(135deg,#c800ff,#00d4ff);color:#000;border:none;padding:13px 26px;border-radius:10px;font-weight:700;cursor:pointer;font-family:ui-monospace,monospace;font-size:13px;letter-spacing:1px;margin-right:8px;margin-bottom:8px}
+.btn:hover{opacity:0.9}
+.btn.sec{background:transparent;color:#c800ff;border:1px solid #c800ff}
+.btn.sec:hover{background:rgba(200,0,255,0.1)}
+.presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.preset{padding:6px 12px;background:rgba(200,0,255,0.1);border:1px solid #3a1a4a;color:#c800ff;border-radius:20px;font-size:11px;cursor:pointer;font-family:ui-monospace,monospace}
+.preset:hover{background:rgba(200,0,255,0.2)}
+.result{background:rgba(0,0,0,0.6);border:1px solid #3a1a4a;border-radius:10px;padding:16px;font-family:ui-monospace,monospace;font-size:12px;color:#00ffc8;white-space:pre-wrap;word-break:break-word;max-height:500px;overflow:auto;line-height:1.6;margin-top:14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.stat{background:rgba(0,0,0,0.4);border:1px solid #3a1a4a;border-radius:8px;padding:10px 12px}
+.stat-lbl{color:#7a5a9a;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px}
+.stat-val{color:#c800ff;font-size:18px;font-weight:700;font-family:ui-monospace,monospace}
+.list{background:rgba(0,0,0,0.3);border-radius:8px;padding:12px;max-height:300px;overflow:auto;font-family:ui-monospace,monospace;font-size:11px;color:#7a5a9a;line-height:1.8}
+.list a{color:#00d4ff;text-decoration:none}
+.list a:hover{color:#c800ff}
+.footer{text-align:center;color:#3a2a4a;font-size:11px;margin-top:30px;font-family:ui-monospace,monospace}
+.loader{text-align:center;padding:30px;color:#c800ff}
+.spinner{display:inline-block;width:30px;height:30px;border:3px solid rgba(200,0,255,0.3);border-top-color:#c800ff;border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>NEXUS GENERATOR</h1>
+<div class="subtitle">Genere un script Python depuis un prompt - Aissa Mohammedi (DGK) - v__V__</div>
+
+<div class="panel">
+<h2>Prompt</h2>
+<div class="presets">
+<div class="preset" onclick="setPrompt('cree moi un script pour analyse pc')">Analyse PC</div>
+<div class="preset" onclick="setPrompt('scanner mon reseau')">Scanner reseau</div>
+<div class="preset" onclick="setPrompt('analyser mes fichiers')">Analyser fichiers</div>
+<div class="preset" onclick="setPrompt('audit securite et certificats tls')">Audit securite</div>
+<div class="preset" onclick="setPrompt('monitoring systeme en temps reel')">Monitoring</div>
+<div class="preset" onclick="setPrompt('tableau de bord web pour suivre mes donnees')">Dashboard web</div>
+</div>
+<div class="form-group">
+<label>Decris ce que tu veux</label>
+<textarea id="prompt" placeholder="Ex: cree moi un script pour analyse pc">cree moi un script pour analyse pc</textarea>
+</div>
+<div class="form-group">
+<label>Port du serveur genere</label>
+<input type="number" id="port" value="8090" min="1024" max="65535">
+</div>
+<button class="btn" onclick="generer()">GENERER</button>
+<button class="btn sec" onclick="genererEtSauver()">GENERER + SAUVEGARDER</button>
+<button class="btn sec" onclick="voirFichiers()">VOIR FICHIERS</button>
+</div>
+
+<div class="panel" id="panel-result" style="display:none">
+<h2>Resultat</h2>
+<div class="stats" id="stats"></div>
+<div class="result" id="result"></div>
+</div>
+
+<div class="panel" id="panel-fichiers" style="display:none">
+<h2>Fichiers generes</h2>
+<div class="list" id="fichiers"></div>
+</div>
+
+<div class="footer">NEXUS GENERATOR v__V__ - Aissa Mohammedi (DGK) - NEXUS-OPEN-2.0</div>
+</div>
+
+<script>
+function esc(s){return String(s||'').replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+
+function setPrompt(p){
+document.getElementById('prompt').value = p;
+}
+
+async function generer(){
+var prompt = document.getElementById('prompt').value.trim();
+if(!prompt){ alert('Ecris un prompt'); return; }
+var port = parseInt(document.getElementById('port').value) || 8090;
+
+var panel = document.getElementById('panel-result');
+panel.style.display = 'block';
+document.getElementById('stats').innerHTML = '<div class="loader"><div class="spinner"></div><div>Generation en cours...</div></div>';
+document.getElementById('result').textContent = '';
+
+try{
+var r = await fetch('/api/generate', {
+method:'POST',
+headers:{'Content-Type':'application/json'},
+body: JSON.stringify({prompt: prompt, port: port, save: false})
+});
+var d = await r.json();
+if(d.ok){
+afficherResultat(d);
+} else {
+document.getElementById('stats').innerHTML = '<div class="result">Erreur : ' + esc(d.erreur || '?') + '</div>';
+}
+}catch(e){
+document.getElementById('stats').innerHTML = '<div class="result">Erreur reseau : ' + esc(e.message) + '</div>';
+}
+}
+
+async function genererEtSauver(){
+var prompt = document.getElementById('prompt').value.trim();
+if(!prompt){ alert('Ecris un prompt'); return; }
+var port = parseInt(document.getElementById('port').value) || 8090;
+
+var panel = document.getElementById('panel-result');
+panel.style.display = 'block';
+document.getElementById('stats').innerHTML = '<div class="loader"><div class="spinner"></div><div>Generation + sauvegarde...</div></div>';
+
+try{
+var r = await fetch('/api/generate', {
+method:'POST',
+headers:{'Content-Type':'application/json'},
+body: JSON.stringify({prompt: prompt, port: port, save: true})
+});
+var d = await r.json();
+if(d.ok){
+afficherResultat(d);
+if(d.chemin){
+alert('Sauvegarde dans : ' + d.chemin);
+}
+} else {
+document.getElementById('stats').innerHTML = '<div class="result">Erreur : ' + esc(d.erreur || '?') + '</div>';
+}
+}catch(e){
+document.getElementById('stats').innerHTML = '<div class="result">Erreur reseau : ' + esc(e.message) + '</div>';
+}
+}
+
+function afficherResultat(d){
+var html = '';
+html += '<div class="stat"><div class="stat-lbl">Domaine</div><div class="stat-val">' + esc(d.domaine) + '</div></div>';
+html += '<div class="stat"><div class="stat-lbl">Confiance</div><div class="stat-val">' + d.confiance_domaine + '</div></div>';
+html += '<div class="stat"><div class="stat-lbl">Fiabilite</div><div class="stat-val">' + esc(d.fiabilite.niveau) + '</div></div>';
+html += '<div class="stat"><div class="stat-lbl">Score</div><div class="stat-val">' + d.fiabilite.score + '/100</div></div>';
+html += '<div class="stat"><div class="stat-lbl">Lignes</div><div class="stat-val">' + d.lignes + '</div></div>';
+html += '<div class="stat"><div class="stat-lbl">Port</div><div class="stat-val">' + d.port + '</div></div>';
+document.getElementById('stats').innerHTML = html;
+
+var result = 'ACTIONS : ' + (d.actions.length ? d.actions.join(', ') : 'aucune') + '\\n\\n';
+result += 'SYNTAXE : ' + (d.verification_syntaxe.ok ? 'OK' : 'KO') + '\\n';
+result += 'IMPORTS : ' + (d.imports_non_stdlib.length ? d.imports_non_stdlib.join(', ') : 'tous stdlib') + '\\n';
+result += 'HASH : ' + d.code_hash.substring(0, 24) + '...\\n\\n';
+result += '=== CODE ===\\n\\n' + d.code;
+document.getElementById('result').textContent = result;
+}
+
+async function voirFichiers(){
+var panel = document.getElementById('panel-fichiers');
+panel.style.display = 'block';
+try{
+var r = await fetch('/api/files');
+var d = await r.json();
+var html = '';
+if(!d.files || !d.files.length){
+html = 'Aucun fichier genere pour le moment.';
+} else {
+d.files.forEach(function(f){
+html += '<div><a href="/generated/' + esc(f.nom) + '" target="_blank">' + esc(f.nom) + '</a> — ' + f.taille + ' o — ' + new Date(f.mtime * 1000).toLocaleString() + '</div>';
+});
+}
+document.getElementById('fichiers').innerHTML = html;
+}catch(e){
+document.getElementById('fichiers').innerHTML = 'Erreur : ' + esc(e.message);
+}
+}
+</script>
+</body>
+</html>"""
+
+
+class Handler(BaseHTTPRequestHandler):
+def log_message(self, *a):
+pass
+
+def _send(self, code, content, ctype="application/json"):
+try:
+self.send_response(code)
+self.send_header("Content-Type", ctype + "; charset=utf-8")
+self.send_header("Access-Control-Allow-Origin", "*")
+self.send_header("Cache-Control", "no-cache")
+self.send_header("Content-Length", str(len(content)))
+self.end_headers()
+self.wfile.write(content)
+except (BrokenPipeError, ConnectionResetError):
+pass
+
+def _read_json(self):
+try:
+length = int(self.headers.get("Content-Length", "0"))
+body = self.rfile.read(length).decode("utf-8")
+return json.loads(body)
+except Exception:
+return {}
+
+def do_GET(self):
+p = self.path.split("?")[0]
+if p in ("/", "/index.html"):
+html = HTML_INDEX.replace("__V__", VERSION)
+return self._send(200, html.encode("utf-8"), "text/html")
+if p == "/api/health":
+return self._send(200, b'{"ok":true}')
+if p == "/api/files":
+fichiers = []
+if os.path.isdir(GENERATED):
+for nom in sorted(os.listdir(GENERATED), reverse=True):
+chemin = os.path.join(GENERATED, nom)
+if os.path.isfile(chemin):
+try:
+st = os.stat(chemin)
+fichiers.append({"nom": nom, "taille": st.st_size, "mtime": st.st_mtime})
+except OSError:
+pass
+return self._send(200, json.dumps({"files": fichiers[:100]}, ensure_ascii=False).encode())
+if p.startswith("/generated/"):
+nom = os.path.basename(p[len("/generated/"):])
+chemin = os.path.join(GENERATED, nom)
+if not os.path.isfile(chemin) or not chemin.startswith(GENERATED):
+return self._send(404, b'{"erreur":"not found"}')
+try:
+with open(chemin, "rb") as f:
+data = f.read()
+return self._send(200, data, "text/plain; charset=utf-8")
+except OSError:
+return self._send(500, b'{"erreur":"read error"}')
+return self._send(404, b'{"erreur":"not found"}')
+
+def do_POST(self):
+p = self.path.split("?")[0]
+data = self._read_json()
+if p == "/api/generate":
+prompt = data.get("prompt", "").strip()
+port = int(data.get("port", 8090))
+save = bool(data.get("save", False))
+if not prompt:
+return self._send(400, json.dumps({"ok": False, "erreur": "prompt vide"}).encode())
+try:
+r = generer_script(prompt, port)
+chemin = None
+if save:
+chemin = sauvegarder(r)
+reponse = dict(r)
+reponse["ok"] = True
+if chemin:
+reponse["chemin"] = chemin
+return self._send(200, json.dumps(reponse, ensure_ascii=False, default=str).encode())
+except Exception as e:
+return self._send(500, json.dumps({"ok": False, "erreur": str(e)[:200]}).encode())
+return self._send(404, b'{"erreur":"not found"}')
+
+
+class Server(ThreadingMixIn, HTTPServer):
+daemon_threads = True
+allow_reuse_address = True
+
+
+def main():
+print("=" * 70)
+print("NEXUS GENERATOR RUNNER v" + VERSION)
+print("Auteur : " + AUTEUR)
+print("Licence : " + LICENCE)
+print("=" * 70)
+print("")
+print("Dossier : " + BASE)
+print("Generes : " + GENERATED)
+print("")
+ip = ip_locale()
+print("Local : http://localhost:" + str(PORT) + "/")
+print("Reseau : http://" + ip + ":" + str(PORT) + "/")
+print("")
+print("Ouvre Safari sur l'URL, ecris un prompt, clique GENERER.")
+print("")
+print("Ctrl+C pour arreter")
+print("")
+try:
+with Server(("0.0.0.0", PORT), Handler) as httpd:
+httpd.serve_forever()
+except KeyboardInterrupt:
+print("")
+print("Arrete.")
+
+
+if __name__ == "__main__":
+main()
